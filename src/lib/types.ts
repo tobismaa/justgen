@@ -3,7 +3,7 @@ export type TransactionMode = "transfer_out" | "transfer_in" | "cash_withdrawal"
 
 export type SpecialTransactionInput = {
   id: string;
-  description: string;
+  suffix: string;
   amount: number;
   kind: EntryKind;
   mode: TransactionMode;
@@ -17,6 +17,10 @@ export type GeneratorInput = {
   startDate: string;
   closingDate: string;
   namePool: string[];
+  yorubaNameRatio: number;
+  igboNameRatio: number;
+  hausaNameRatio: number;
+  otherNameRatio: number;
   openingBalance: number;
   targetClosingBalance: number;
   minimumBalance: number;

@@ -9,6 +9,8 @@ type SeedRow = {
   credit: number;
   group: number;
   order: number;
+  locked: boolean;
+  source: "opening" | "regular" | "salary" | "special" | "adjustment" | "fee";
 };
 
 type NameUsageMeta = {
@@ -19,6 +21,18 @@ type GeneratedNameState = {
   usedFullNames: Set<string>;
   usageMap: Map<string, NameUsageMeta>;
 };
+
+export class GenerationConstraintError extends Error {
+  title: string;
+  suggestions: string[];
+
+  constructor(message: string, options?: { title?: string; suggestions?: string[] }) {
+    super(message);
+    this.name = "GenerationConstraintError";
+    this.title = options?.title ?? "Generation Constraint";
+    this.suggestions = options?.suggestions ?? [];
+  }
+}
 
 function uniqueValues(items: string[]): string[] {
   return Array.from(new Set(items.map((item) => item.trim()).filter(Boolean)));
@@ -373,9 +387,111 @@ const generatedNameBuckets = {
   other: otherNigerianFirstNames,
 };
 
+const generatedSurnameBuckets = {
+  yoruba: uniqueValues([
+    "Abiola",
+    "Adebayo",
+    "Adeyemi",
+    "Afolabi",
+    "Agbaje",
+    "Aigbe",
+    "Aina",
+    "Akinola",
+    "Akinyemi",
+    "Awoniyi",
+    "Balogun",
+    "Ojo",
+    "Olawale",
+    "Olowe",
+    "Omotayo",
+    "Oshodi",
+    "Owolabi",
+    ...buildCombinations(
+      ["Ade", "Akin", "Ala", "Ari", "Bola", "Duro", "Fola", "Ibi", "Lani", "Ola", "Olowo", "Olu", "Ore", "Oye", "Ogun", "Ojo", "Oke", "Ader", "Atoy", "Ayen", "Ayan", "Awo"],
+      ["bayo", "dele", "jide", "tunde", "yemi", "kunle", "wale", "sanya", "niyi", "kanmi", "ranti", "dipo", "femi", "bunmi", "teju", "toye", "shola", "dapo", "sola", "mide"],
+    ),
+  ]),
+  igbo: uniqueValues([
+    "Akubue",
+    "Dike",
+    "Duru",
+    "Elechi",
+    "Emenike",
+    "Eze",
+    "Ezeani",
+    "Ezeh",
+    "Ibe",
+    "Ifejika",
+    "Ijeoma",
+    "Madu",
+    "Nnaji",
+    "Nnamani",
+    "Nnanna",
+    "Nwafor",
+    "Nwagwu",
+    "Nwankwo",
+    "Nwanne",
+    "Nwosu",
+    "Obasi",
+    "Obi",
+    "Obiakor",
+    "Obinna",
+    "Odili",
+    "Okafor",
+    "Okeke",
+    "Okoli",
+    "Okonkwo",
+    "Okoro",
+    "Okoye",
+    "Onyeka",
+    "Onoh",
+    "Umeh",
+    ...buildCombinations(
+      ["Oka", "Nwa", "Ume", "Eze", "Obi", "Ogbu", "Ano", "Ilo", "Nkwo", "Ozo", "Onye", "Uzo"],
+      ["for", "chukwu", "nna", "madu", "kafor", "nnamdi", "dika", "emena", "obi", "onye", "ike", "eze", "adi", "kwu"],
+    ),
+  ]),
+  hausa: uniqueValues([
+    "Aliyu",
+    "Attah",
+    "Baba",
+    "Bello",
+    "Danjuma",
+    "Ibrahim",
+    "Jibril",
+    "Lawal",
+    "Mamman",
+    "Mohammed",
+    "Musa",
+    "Sani",
+    "Shehu",
+    "Sule",
+    "Usman",
+  ]),
+  other: uniqueValues([
+    "Akpan",
+    "Asuquo",
+    "Bassey",
+    "Briggs",
+    "Ekanem",
+    "Ekong",
+    "Etim",
+    "George",
+    "Inyang",
+    "Odia",
+    "Peters",
+    "Udo",
+    "Udoh",
+  ]),
+};
+
+type NameBucketKey = keyof typeof generatedNameBuckets;
+
 const generatedNameUniverseSize =
-  (yorubaFirstNames.length + igboFirstNames.length + hausaFirstNames.length + otherNigerianFirstNames.length) *
-  nigerianSurnames.length;
+  generatedNameBuckets.yoruba.length * generatedSurnameBuckets.yoruba.length +
+  generatedNameBuckets.igbo.length * generatedSurnameBuckets.igbo.length +
+  generatedNameBuckets.hausa.length * generatedSurnameBuckets.hausa.length +
+  generatedNameBuckets.other.length * generatedSurnameBuckets.other.length;
 
 export function getGeneratedNigerianNamePoolSize(): number {
   return generatedNameUniverseSize;
@@ -408,22 +524,35 @@ function mostlyRoundAmount(min: number, max: number): number {
   return raw;
 }
 
+function getSystemTransactionCap(input: GeneratorInput): number {
+  return Math.max(1000, input.maxIncomingAmount);
+}
+
+function getBufferedMonthlyTransactionCount(minMonthly: number, maxMonthly: number): number {
+  const targetCount = randomInt(minMonthly, maxMonthly);
+  const buffer = Math.max(2, Math.ceil(targetCount * 0.45));
+  return targetCount + buffer;
+}
+
 function randomAmount(mode: TransactionMode, input: GeneratorInput): number {
+  const systemTransactionCap = getSystemTransactionCap(input);
+
   if (mode === "salary") {
-    return mostlyRoundAmount(180000, 950000);
+    return mostlyRoundAmount(180000, Math.max(180000, systemTransactionCap));
   }
 
   if (mode === "transfer_in") {
     const minIncomingAmount = Math.max(1000, input.minIncomingAmount);
-    const maxIncomingAmount = Math.max(minIncomingAmount, input.maxIncomingAmount);
+    const maxIncomingAmount = Math.max(minIncomingAmount, systemTransactionCap);
     return mostlyRoundAmount(minIncomingAmount, maxIncomingAmount);
   }
 
   if (mode === "cash_withdrawal") {
-    return randomInt(10, 250) * 1000;
+    const cappedThousands = Math.max(1, Math.floor(systemTransactionCap / 1000));
+    return randomInt(1, cappedThousands) * 1000;
   }
 
-  return mostlyRoundAmount(1500, 180000);
+  return mostlyRoundAmount(1500, Math.max(1500, systemTransactionCap));
 }
 
 function clampDay(year: number, monthIndex: number, day: number): number {
@@ -508,6 +637,15 @@ function buildNarration(
   return `Funds Transfer from ${customerName} to ${counterpartyName}`;
 }
 
+function appendSuffix(description: string, suffix: string): string {
+  const cleanSuffix = suffix.trim();
+  if (!cleanSuffix) {
+    return description;
+  }
+
+  return `${description} - ${cleanSuffix}`;
+}
+
 function normalizeSpecialTransactions(items: SpecialTransactionInput[]): SpecialTransactionInput[] {
   return items.filter((item) => item.amount > 0 && item.date);
 }
@@ -534,28 +672,47 @@ function getAvailableNames(customerName: string, namePool: string[]): string[] {
   return uniqueNames.filter((item) => item.toLowerCase() !== customerKey);
 }
 
-function pickWeightedBucket(): string[] {
-  const roll = Math.random();
+function getNameBucketRatios(input: GeneratorInput): Array<{ key: NameBucketKey; ratio: number }> {
+  const ratios = [
+    { key: "yoruba" as const, ratio: Math.max(0, input.yorubaNameRatio) },
+    { key: "igbo" as const, ratio: Math.max(0, input.igboNameRatio) },
+    { key: "hausa" as const, ratio: Math.max(0, input.hausaNameRatio) },
+    { key: "other" as const, ratio: Math.max(0, input.otherNameRatio) },
+  ];
 
-  if (roll < 0.6) {
-    return generatedNameBuckets.yoruba;
+  const total = ratios.reduce((sum, item) => sum + item.ratio, 0);
+  if (total <= 0) {
+    return [
+      { key: "yoruba", ratio: 60 },
+      { key: "igbo", ratio: 20 },
+      { key: "hausa", ratio: 10 },
+      { key: "other", ratio: 10 },
+    ];
   }
 
-  if (roll < 0.8) {
-    return generatedNameBuckets.igbo;
+  return ratios;
+}
+
+function pickWeightedBucketKey(input: GeneratorInput): NameBucketKey {
+  const ratios = getNameBucketRatios(input);
+  const total = ratios.reduce((sum, item) => sum + item.ratio, 0);
+  let marker = Math.random() * total;
+
+  for (const item of ratios) {
+    marker -= item.ratio;
+    if (marker <= 0) {
+      return item.key;
+    }
   }
 
-  if (roll < 0.9) {
-    return generatedNameBuckets.hausa;
-  }
-
-  return generatedNameBuckets.other;
+  return ratios[ratios.length - 1].key;
 }
 
 function pickGeneratedCounterparty(
   customerName: string,
   date: Date,
   generatedState: GeneratedNameState,
+  input: GeneratorInput,
 ): string {
   if (generatedState.usedFullNames.size >= generatedNameUniverseSize) {
     generatedState.usedFullNames.clear();
@@ -566,8 +723,9 @@ function pickGeneratedCounterparty(
   const dayKey = getDayKey(date.toISOString());
 
   for (let attempt = 0; attempt < 1200; attempt += 1) {
-    const firstName = randomFrom(pickWeightedBucket());
-    const surname = randomFrom(nigerianSurnames);
+    const bucketKey = pickWeightedBucketKey(input);
+    const firstName = randomFrom(generatedNameBuckets[bucketKey]);
+    const surname = randomFrom(generatedSurnameBuckets[bucketKey]);
     const fullName = `${firstName} ${surname}`.trim();
     const normalized = fullName.toLowerCase();
 
@@ -580,14 +738,14 @@ function pickGeneratedCounterparty(
     return fullName;
   }
 
-  for (const firstName of [
-    ...generatedNameBuckets.yoruba,
-    ...generatedNameBuckets.igbo,
-    ...generatedNameBuckets.hausa,
-    ...generatedNameBuckets.other,
+  for (const entry of [
+    ...generatedNameBuckets.yoruba.map((name) => ({ name, bucket: "yoruba" as const })),
+    ...generatedNameBuckets.igbo.map((name) => ({ name, bucket: "igbo" as const })),
+    ...generatedNameBuckets.hausa.map((name) => ({ name, bucket: "hausa" as const })),
+    ...generatedNameBuckets.other.map((name) => ({ name, bucket: "other" as const })),
   ]) {
-    for (const surname of nigerianSurnames) {
-      const fullName = `${firstName} ${surname}`.trim();
+    for (const surname of generatedSurnameBuckets[entry.bucket]) {
+      const fullName = `${entry.name} ${surname}`.trim();
       const normalized = fullName.toLowerCase();
 
       if (normalized === customerKey || generatedState.usedFullNames.has(normalized)) {
@@ -601,7 +759,7 @@ function pickGeneratedCounterparty(
   }
 
   generatedState.usedFullNames.clear();
-  return `${randomFrom(generatedNameBuckets.yoruba)} ${randomFrom(nigerianSurnames)}`;
+  return `${randomFrom(generatedNameBuckets.yoruba)} ${randomFrom(generatedSurnameBuckets.yoruba)}`;
 }
 
 function pickCounterpartyForDate(
@@ -613,7 +771,7 @@ function pickCounterpartyForDate(
   input: GeneratorInput,
 ): string {
   if (namePool.length === 0) {
-    return pickGeneratedCounterparty(customerName, date, generatedState);
+    return pickGeneratedCounterparty(customerName, date, generatedState, input);
   }
 
   const dayKey = getDayKey(date.toISOString());
@@ -673,6 +831,12 @@ function ensureBalanceRange(rows: SeedRow[], openingBalance: number, minimumBala
       return [row];
     }
 
+    if (row.locked) {
+      runningBalance += row.credit;
+      runningBalance -= row.debit;
+      return [row];
+    }
+
     let nextDebit = row.debit;
     let nextCredit = row.credit;
 
@@ -719,23 +883,56 @@ function ensureBalanceRange(rows: SeedRow[], openingBalance: number, minimumBala
   });
 }
 
-function buildClosingAdjustmentAmount(requiredChange: number): { mode: TransactionMode; amount: number } | null {
+function buildClosingAdjustmentAmount(requiredChange: number, input: GeneratorInput): { mode: TransactionMode; amount: number } | null {
   if (requiredChange === 0) {
     return null;
   }
 
   if (requiredChange > 0) {
     const withoutStamp = Math.round(requiredChange + 5);
-    if (withoutStamp < 10000) {
-      return { mode: "transfer_in", amount: Math.max(1000, roundToStep(withoutStamp, 100)) };
+    const maxIncomingAmount = getSystemTransactionCap(input);
+    const incomingAmount =
+      withoutStamp < 10000
+        ? Math.max(1000, roundToStep(withoutStamp, 100))
+        : Math.max(10000, roundToStep(Math.round(requiredChange + 55), 100));
+
+    if (incomingAmount > maxIncomingAmount) {
+      throw new GenerationConstraintError(
+        `Unable to reach the target closing balance without creating an incoming transaction above the configured maximum of ${formatNairaAmount(maxIncomingAmount)}. Increase Maximum Transaction Amount or lower the Target Closing Balance.`,
+        {
+          title: "Target Closing Balance Cannot Be Reached",
+          suggestions: [
+            `Increase Maximum Transaction Amount to at least ${formatNairaAmount(incomingAmount)}.`,
+            `Lower Target Closing Balance by about ${formatNairaAmount(Math.max(1000, requiredChange))}.`,
+            "Reduce large fixed credits like salary or special credit transactions if the statement is ending too high.",
+          ],
+        },
+      );
     }
 
-    return { mode: "transfer_in", amount: Math.max(10000, roundToStep(Math.round(requiredChange + 55), 100)) };
+    return { mode: "transfer_in", amount: incomingAmount };
   }
 
   const decreaseNeeded = Math.abs(requiredChange);
   const debitAmount = Math.max(0, Math.round(decreaseNeeded - 5));
-  return { mode: "transfer_out", amount: Math.max(1000, roundToStep(debitAmount, 100)) };
+  const outgoingAmount = Math.max(1000, roundToStep(debitAmount, 100));
+  const maxTransactionAmount = getSystemTransactionCap(input);
+
+  if (outgoingAmount > maxTransactionAmount) {
+    throw new GenerationConstraintError(
+      `Unable to reach the target closing balance without creating a debit transaction above the configured maximum of ${formatNairaAmount(maxTransactionAmount)}.`,
+      {
+        title: "Target Closing Balance Cannot Be Reached",
+        suggestions: [
+          `Increase Maximum Transaction Amount to at least ${formatNairaAmount(outgoingAmount)}.`,
+          `Raise Target Closing Balance by about ${formatNairaAmount(Math.abs(requiredChange))}.`,
+          "Reduce large fixed debits or special debit transactions if the statement is ending too low.",
+        ],
+      },
+    );
+  }
+
+  return { mode: "transfer_out", amount: outgoingAmount };
 }
 
 function pushPrimaryTransaction(
@@ -746,6 +943,8 @@ function pushPrimaryTransaction(
     debit: number;
     credit: number;
     mode: TransactionMode;
+    locked?: boolean;
+    source?: SeedRow["source"];
   },
 ) {
   const group = rows.length + 1;
@@ -753,6 +952,8 @@ function pushPrimaryTransaction(
   const baseTime = payload.date.getTime();
   const transferCharge = payload.mode === "transfer_out" ? buildTransferCharge(payload.debit) : 0;
   const hasStampDuty = payload.credit >= 10000;
+  const locked = payload.locked ?? false;
+  const source = payload.source ?? "regular";
 
   rows.push({
     id: crypto.randomUUID(),
@@ -762,6 +963,8 @@ function pushPrimaryTransaction(
     credit: payload.credit,
     group,
     order: 1,
+    locked,
+    source,
   });
 
   if (transferCharge > 0) {
@@ -773,6 +976,8 @@ function pushPrimaryTransaction(
       credit: 0,
       group,
       order: 2,
+      locked,
+      source: "fee",
     });
   }
 
@@ -780,23 +985,27 @@ function pushPrimaryTransaction(
     rows.push({
       id: crypto.randomUUID(),
       date: new Date(baseTime + (transferCharge > 0 ? 2000 : 1000)).toISOString(),
-      description: "Stamp Duty Charge",
-      debit: 50,
-      credit: 0,
-      group,
-      order: transferCharge > 0 ? 3 : 2,
-    });
+        description: "Stamp Duty Charge",
+        debit: 50,
+        credit: 0,
+        group,
+        order: transferCharge > 0 ? 3 : 2,
+        locked,
+        source: "fee",
+      });
   }
 
   rows.push({
     id: crypto.randomUUID(),
     date: new Date(baseTime + (transferCharge > 0 ? 3000 : hasStampDuty && payload.mode !== "salary" ? 2000 : 1000)).toISOString(),
-    description: buildSmsNarration(chargeCode),
-    debit: 5,
-    credit: 0,
-    group,
-    order: transferCharge > 0 ? 4 : hasStampDuty && payload.mode !== "salary" ? 3 : 2,
-  });
+      description: buildSmsNarration(chargeCode),
+      debit: 5,
+      credit: 0,
+      group,
+      order: transferCharge > 0 ? 4 : hasStampDuty && payload.mode !== "salary" ? 3 : 2,
+      locked,
+      source: "fee",
+    });
 
   if (hasStampDuty && payload.mode === "salary") {
     rows.push({
@@ -807,11 +1016,32 @@ function pushPrimaryTransaction(
       credit: 0,
       group,
       order: transferCharge > 0 ? 5 : 3,
+      locked,
+      source: "fee",
     });
   }
 }
 
 export function generateTransactions(input: GeneratorInput): TransactionRow[] {
+  if (input.minIncomingAmount > input.maxIncomingAmount) {
+    throw new GenerationConstraintError("Minimum Incoming Amount cannot be greater than Maximum Transaction Amount.", {
+      title: "Invalid Transaction Limits",
+      suggestions: [
+        "Lower Minimum Incoming Amount.",
+        "Increase Maximum Transaction Amount.",
+      ],
+    });
+  }
+
+  if (input.maxIncomingAmount < 1000) {
+    throw new GenerationConstraintError("Maximum Transaction Amount must be at least 1000.", {
+      title: "Invalid Transaction Limits",
+      suggestions: [
+        "Set Maximum Transaction Amount to 1000 or higher.",
+      ],
+    });
+  }
+
   const startBoundary = new Date(`${input.startDate}T00:00:00`);
   const endBoundary = new Date(`${input.closingDate}T00:00:00`);
   const safeEndBoundary = endBoundary >= startBoundary ? endBoundary : startBoundary;
@@ -840,6 +1070,8 @@ export function generateTransactions(input: GeneratorInput): TransactionRow[] {
     credit: input.openingBalance,
     group: 0,
     order: 0,
+    locked: true,
+    source: "opening",
   });
 
   for (let monthOffset = 0; monthOffset < months; monthOffset += 1) {
@@ -847,7 +1079,7 @@ export function generateTransactions(input: GeneratorInput): TransactionRow[] {
     const year = monthDate.getFullYear();
     const monthIndex = monthDate.getMonth();
     const totalDays = new Date(year, monthIndex + 1, 0).getDate();
-    const totalTransactions = randomInt(minMonthly, maxMonthly);
+    const totalTransactions = getBufferedMonthlyTransactionCount(minMonthly, maxMonthly);
 
     if (input.includeSalary && input.salaryAmount > 0) {
       const salaryDay = clampDay(year, monthIndex, input.salaryDay);
@@ -860,6 +1092,8 @@ export function generateTransactions(input: GeneratorInput): TransactionRow[] {
           debit: 0,
           credit: input.salaryAmount,
           mode: "salary",
+          locked: true,
+          source: "salary",
         });
       }
     }
@@ -891,6 +1125,7 @@ export function generateTransactions(input: GeneratorInput): TransactionRow[] {
         debit: isCredit ? 0 : amount,
         credit: isCredit ? amount : 0,
         mode,
+        source: "regular",
       });
     }
   }
@@ -909,12 +1144,15 @@ export function generateTransactions(input: GeneratorInput): TransactionRow[] {
       generatedNameState,
       input,
     );
-    const narration = item.description.trim() || buildNarration(
-      item.mode,
-      input.customerName,
-      item.amount,
-      counterpartyName,
-      salaryCompanyName,
+    const narration = appendSuffix(
+      buildNarration(
+        item.mode,
+        input.customerName,
+        item.amount,
+        counterpartyName,
+        salaryCompanyName,
+      ),
+      item.suffix,
     );
 
     pushPrimaryTransaction(rows, {
@@ -923,6 +1161,8 @@ export function generateTransactions(input: GeneratorInput): TransactionRow[] {
       debit: item.kind === "debit" ? item.amount : 0,
       credit: item.kind === "credit" ? item.amount : 0,
       mode: item.mode,
+      locked: true,
+      source: "special",
     });
   }
 
@@ -956,7 +1196,7 @@ export function generateTransactions(input: GeneratorInput): TransactionRow[] {
   const closingServiceCharge = 2500;
   const closingVatCharge = 250;
   const adjustmentNeeded = Number((input.targetClosingBalance - (provisionalBalance - closingServiceCharge - closingVatCharge)).toFixed(2));
-  const adjustment = buildClosingAdjustmentAmount(adjustmentNeeded);
+  const adjustment = buildClosingAdjustmentAmount(adjustmentNeeded, input);
 
   if (adjustment && adjustment.amount > 0) {
     const counterpartyName = pickCounterpartyForDate(
@@ -979,6 +1219,8 @@ export function generateTransactions(input: GeneratorInput): TransactionRow[] {
       debit: adjustment.mode === "transfer_out" ? adjustment.amount : 0,
       credit: adjustment.mode === "transfer_in" ? adjustment.amount : 0,
       mode: adjustment.mode,
+      locked: true,
+      source: "adjustment",
     });
   }
 
@@ -990,6 +1232,8 @@ export function generateTransactions(input: GeneratorInput): TransactionRow[] {
     credit: 0,
     group: Number.MAX_SAFE_INTEGER - 1,
     order: 4,
+    locked: true,
+    source: "fee",
   });
 
   boundedRows.push({
@@ -1000,6 +1244,8 @@ export function generateTransactions(input: GeneratorInput): TransactionRow[] {
     credit: 0,
     group: Number.MAX_SAFE_INTEGER,
     order: 5,
+    locked: true,
+    source: "fee",
   });
 
   boundedRows.sort((first, second) => {
@@ -1022,7 +1268,6 @@ export function generateTransactions(input: GeneratorInput): TransactionRow[] {
     input.minimumBalance,
     input.maximumBalance,
   );
-
   let runningBalance = input.openingBalance;
 
   return finalRows.map((row, index) => {
